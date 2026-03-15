@@ -185,6 +185,8 @@ with st.sidebar:
             for s in try_next:
                 if st.button(s, key=f"sugg_try_{s[:30]}"):
                     st.session_state["sentence"] = s
+                    st.session_state["sentence_input"] = s
+                    st.session_state["_auto_parse"] = True
                     st.rerun()
 
         # Contrast sentences
@@ -194,6 +196,8 @@ with st.sidebar:
             for s in contrast:
                 if st.button(s, key=f"sugg_con_{s[:30]}"):
                     st.session_state["sentence"] = s
+                    st.session_state["sentence_input"] = s
+                    st.session_state["_auto_parse"] = True
                     st.rerun()
 
         # Learn tips
@@ -208,6 +212,8 @@ with st.sidebar:
                     if st.button(f"Try: {ex[:35]}…" if len(ex)>35 else f"Try: {ex}",
                                  key=f"sugg_learn_{ex[:25]}"):
                         st.session_state["sentence"] = ex
+                        st.session_state["sentence_input"] = ex
+                        st.session_state["_auto_parse"] = True
                         st.rerun()
 
         st.markdown("---")
@@ -227,6 +233,8 @@ with st.sidebar:
     for ex in examples:
         if st.button(ex, key=f"ex_{ex}"):
             st.session_state["sentence"] = ex
+            st.session_state["sentence_input"] = ex
+            st.session_state["_auto_parse"] = True
             st.rerun()
 
     st.markdown("---")
@@ -673,17 +681,25 @@ def render_deep_explanation(d: dict):
 if "sentence" not in st.session_state:
     st.session_state["sentence"] = ""
 
+# Keep input box in sync when a suggestion is clicked
+if st.session_state.get("sentence") and st.session_state.get("sentence") != st.session_state.get("sentence_input", ""):
+    st.session_state["sentence_input"] = st.session_state["sentence"]
+
 col_inp, col_btn = st.columns([5, 1])
 with col_inp:
     sentence = st.text_input(
         "sentence",
-        value=st.session_state["sentence"],
         placeholder="e.g. The scientist quickly discovered a cure.",
         label_visibility="collapsed",
         key="sentence_input",
     )
 with col_btn:
     parse_clicked = st.button("Parse →", use_container_width=True)
+
+# Auto-parse when a suggestion chip was clicked
+if st.session_state.get("_auto_parse"):
+    st.session_state["_auto_parse"] = False
+    parse_clicked = True
 
 
 # ── Parse ───────────────────────────────────────────────────────────────────
@@ -786,4 +802,3 @@ elif not parse_clicked:
         <span style="font-size:0.72rem;color:#aaa">Powered by Groq · Llama 3.3 70B · Free forever</span>
     </div>
     """, unsafe_allow_html=True)
-
