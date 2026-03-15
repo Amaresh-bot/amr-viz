@@ -159,26 +159,60 @@ st.markdown("""
 with st.sidebar:
     st.markdown("### Configuration")
     api_key = st.secrets.get("GROQ_API_KEY", "")
-if not api_key:
-    api_key = st.sidebar.text_input(
-        "Groq API Key",
-        type="password",
-        placeholder="gsk_...",
-        help="Get your free key at console.groq.com",
-    )
-    st.sidebar.caption("Free · No credit card · Very fast")
+    if not api_key:
+        api_key = st.sidebar.text_input(
+            "Groq API Key",
+            type="password",
+            placeholder="gsk_...",
+            help="Get your free key at console.groq.com",
+        )
+        st.caption("Free · No credit card · Very fast")
 
     st.markdown("---")
-    st.markdown("**How to get a free Groq key**")
-    st.markdown("""
-1. Go to **console.groq.com**
-2. Click **Sign Up** (use Google or email)
-3. Go to **API Keys** in left menu
-4. Click **Create API Key**
-5. Copy it — starts with `gsk_`
-6. Paste it above
-""")
-    st.markdown("---")
+
+    # ── Smart suggestions (shown after a parse) ─────────────────────────────
+    sugg = st.session_state.get("suggestions", {})
+    last_sentence = st.session_state.get("amr_sentence", "")
+
+    if sugg and last_sentence:
+        st.markdown("### Smart suggestions")
+        st.caption(f'Based on: *"{last_sentence[:40]}{"…" if len(last_sentence)>40 else ""}"*')
+
+        # Try these next
+        try_next = sugg.get("try_next", [])
+        if try_next:
+            st.markdown("**Try these next**")
+            for s in try_next:
+                if st.button(s, key=f"sugg_try_{s[:30]}"):
+                    st.session_state["sentence"] = s
+                    st.rerun()
+
+        # Contrast sentences
+        contrast = sugg.get("contrast", [])
+        if contrast:
+            st.markdown("**See the contrast**")
+            for s in contrast:
+                if st.button(s, key=f"sugg_con_{s[:30]}"):
+                    st.session_state["sentence"] = s
+                    st.rerun()
+
+        # Learn tips
+        learn = sugg.get("learn", [])
+        if learn:
+            st.markdown("**AMR tips from this parse**")
+            for item in learn:
+                tip  = item.get("tip", "")
+                ex   = item.get("example", "")
+                with st.expander(tip):
+                    st.caption(ex)
+                    if st.button(f"Try: {ex[:35]}…" if len(ex)>35 else f"Try: {ex}",
+                                 key=f"sugg_learn_{ex[:25]}"):
+                        st.session_state["sentence"] = ex
+                        st.rerun()
+
+        st.markdown("---")
+
+    # ── Static examples (always shown) ─────────────────────────────────────
     st.markdown("**Example sentences**")
     examples = [
         "The boy wants to go.",
@@ -193,6 +227,7 @@ if not api_key:
     for ex in examples:
         if st.button(ex, key=f"ex_{ex}"):
             st.session_state["sentence"] = ex
+            st.rerun()
 
     st.markdown("---")
     st.markdown("""
@@ -272,6 +307,54 @@ STRICT RULES:
 """
 
 
+# ── Suggestions prompt ─────────────────────────────────────────────────────
+def build_suggestions_prompt(sentence: str, nodes: list) -> str:
+    concepts = ", ".join(n.get("concept", "") for n in nodes[:5])
+    return f"""Given this sentence and its AMR concepts, generate smart follow-up suggestions.
+
+Sentence: "{sentence}"
+AMR concepts used: {concepts}
+
+Return ONLY raw JSON — no markdown, no text outside JSON:
+{{
+  "try_next": [
+    "A slightly more complex version of the same sentence",
+    "Same sentence but negated",
+    "Same sentence with a named entity added"
+  ],
+  "contrast": [
+    "A sentence that uses the same root concept differently",
+    "A sentence that shows coreference"
+  ],
+  "learn": [
+    {{
+      "tip": "Short AMR tip title",
+      "example": "Example sentence showing that tip"
+    }},
+    {{
+      "tip": "Another AMR tip title",
+      "example": "Example sentence showing that tip"
+    }}
+  ]
+}}
+
+Rules:
+- try_next: 3 sentences, each a natural variation of the input
+- contrast: 2 sentences showing different AMR patterns
+- learn: 2 tips directly relevant to the concepts in this AMR
+- All strings short — under 60 characters
+- No double quotes inside string values
+- Return complete valid JSON only
+"""
+
+def fetch_suggestions(api_key: str, sentence: str, nodes: list) -> dict:
+    try:
+        raw = call_groq(api_key, build_suggestions_prompt(sentence, nodes))
+        return safe_parse(raw)
+    except Exception:
+        return {}
+
+
 # ── Groq API call ───────────────────────────────────────────────────────────
 def call_groq(api_key: str, prompt: str) -> str:
     url = "https://api.groq.com/openai/v1/chat/completions"
@@ -302,15 +385,55 @@ def call_groq(api_key: str, prompt: str) -> str:
 
 
 # ── JSON repair ─────────────────────────────────────────────────────────────
-def safe_parse(text: str) -> dict:
+def clean_json_string(text: str) -> str:
+    """Remove control characters and fix common JSON issues from LLM output."""
+    # Strip markdown fences
     text = re.sub(r'^```(?:json)?\s*', '', text.strip(), flags=re.I)
     text = re.sub(r'\s*```$', '', text.strip())
+    # Extract just the JSON object
     f, l = text.find("{"), text.rfind("}")
     if f != -1 and l > f:
         text = text[f:l+1]
+    # Fix control characters inside JSON strings — the main cause of this error.
+    # Walk char by char: inside a string, replace raw newlines/tabs with escape sequences.
+    result = []
+    in_string = False
+    escape_next = False
+    for ch in text:
+        if escape_next:
+            result.append(ch)
+            escape_next = False
+            continue
+        if ch == '\\':
+            result.append(ch)
+            escape_next = True
+            continue
+        if ch == '"':
+            in_string = not in_string
+            result.append(ch)
+            continue
+        if in_string:
+            if ch == '\n':
+                result.append('\\n')
+            elif ch == '\r':
+                result.append('\\r')
+            elif ch == '\t':
+                result.append('\\t')
+            elif ord(ch) < 32:
+                # Replace any other control character with a space
+                result.append(' ')
+            else:
+                result.append(ch)
+        else:
+            result.append(ch)
+    return ''.join(result)
+
+def safe_parse(text: str) -> dict:
+    text = clean_json_string(text)
     try:
         return json.loads(text)
     except json.JSONDecodeError:
+        # Last resort: close any unclosed structures
         r = text.rstrip().rstrip(",")
         if r.count('"') % 2 != 0:
             r += '"'
@@ -572,8 +695,11 @@ if parse_clicked and sentence.strip():
             try:
                 raw_text = call_groq(api_key, build_prompt(sentence))
                 data     = safe_parse(raw_text)
-                st.session_state["amr_result"]  = data
-                st.session_state["amr_sentence"] = sentence
+                st.session_state["amr_result"]   = data
+                st.session_state["amr_sentence"]  = sentence
+                # Fetch smart suggestions in the background
+                sugg = fetch_suggestions(api_key, sentence, data.get("nodes", []))
+                st.session_state["suggestions"]   = sugg
             except json.JSONDecodeError as e:
                 st.error(f"Could not parse response as JSON. Try again. Detail: {e}")
             except Exception as e:
@@ -660,3 +786,4 @@ elif not parse_clicked:
         <span style="font-size:0.72rem;color:#aaa">Powered by Groq · Llama 3.3 70B · Free forever</span>
     </div>
     """, unsafe_allow_html=True)
+
