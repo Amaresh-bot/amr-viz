@@ -394,33 +394,75 @@ def call_groq(api_key: str, prompt: str) -> str:
 
 # ── JSON repair ─────────────────────────────────────────────────────────────
 def clean_json_string(text: str) -> str:
-    """Remove control characters and fix common JSON issues from LLM output."""
-    # Strip markdown fences
+    """
+    Robustly clean LLM JSON output.
+    Handles:
+      1. Markdown fences (```json ... ```)
+      2. Raw control characters inside strings (\n \r \t etc.)
+      3. Unescaped double-quotes inside string values  → the ',' delimiter error
+      4. En-dashes / smart quotes / unicode punctuation that break strict JSON
+    """
+    # 1 — strip markdown fences and surrounding whitespace
     text = re.sub(r'^```(?:json)?\s*', '', text.strip(), flags=re.I)
     text = re.sub(r'\s*```$', '', text.strip())
-    # Extract just the JSON object
+
+    # 2 — extract the outermost { ... }
     f, l = text.find("{"), text.rfind("}")
     if f != -1 and l > f:
         text = text[f:l+1]
-    # Fix control characters inside JSON strings — the main cause of this error.
-    # Walk char by char: inside a string, replace raw newlines/tabs with escape sequences.
-    result = []
-    in_string = False
+
+    # 3 — replace smart/curly quotes with plain ASCII quotes
+    text = text.replace('\u201c', '"').replace('\u201d', '"')
+    text = text.replace('\u2018', "'").replace('\u2019', "'")
+    # replace en-dash / em-dash inside strings with a hyphen
+    text = text.replace('\u2013', '-').replace('\u2014', '-')
+
+    # 4 — walk char-by-char to fix control chars AND unescaped inner quotes
+    result      = []
+    in_string   = False
     escape_next = False
-    for ch in text:
+    i = 0
+    while i < len(text):
+        ch = text[i]
+
         if escape_next:
+            # whatever follows a backslash — keep as-is
             result.append(ch)
             escape_next = False
+            i += 1
             continue
+
         if ch == '\\':
             result.append(ch)
             escape_next = True
+            i += 1
             continue
+
         if ch == '"':
-            in_string = not in_string
-            result.append(ch)
+            if not in_string:
+                # opening quote
+                in_string = True
+                result.append(ch)
+            else:
+                # Could be closing quote OR an unescaped inner quote.
+                # Peek ahead: if next non-whitespace char is one of  : , } ]
+                # then this IS the closing quote.
+                j = i + 1
+                while j < len(text) and text[j] in ' \t\r\n':
+                    j += 1
+                next_ch = text[j] if j < len(text) else ''
+                if next_ch in (',', '}', ']', ':'):
+                    # legitimate closing quote
+                    in_string = False
+                    result.append(ch)
+                else:
+                    # unescaped inner quote — escape it
+                    result.append('\\"')
+            i += 1
             continue
+
         if in_string:
+            # fix raw control characters
             if ch == '\n':
                 result.append('\\n')
             elif ch == '\r':
@@ -428,26 +470,33 @@ def clean_json_string(text: str) -> str:
             elif ch == '\t':
                 result.append('\\t')
             elif ord(ch) < 32:
-                # Replace any other control character with a space
                 result.append(' ')
             else:
                 result.append(ch)
         else:
             result.append(ch)
+        i += 1
+
     return ''.join(result)
 
+
 def safe_parse(text: str) -> dict:
-    text = clean_json_string(text)
+    cleaned = clean_json_string(text)
     try:
-        return json.loads(text)
+        return json.loads(cleaned)
     except json.JSONDecodeError:
         # Last resort: close any unclosed structures
-        r = text.rstrip().rstrip(",")
+        r = cleaned.rstrip().rstrip(",")
         if r.count('"') % 2 != 0:
             r += '"'
         r += "]" * max(0, r.count("[") - r.count("]"))
         r += "}" * max(0, r.count("{") - r.count("}"))
-        return json.loads(r)
+        try:
+            return json.loads(r)
+        except json.JSONDecodeError as e:
+            raise json.JSONDecodeError(
+                f"Could not repair JSON. Detail: {e.msg}", e.doc, e.pos
+            )
 
 
 # ── SVG graph builder ───────────────────────────────────────────────────────
