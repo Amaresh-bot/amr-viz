@@ -977,11 +977,13 @@ def render_deep_explanation(d: dict):
     features = de.get("special_features", [])
     if features:
         feat_html = ""
-        for f in features:
+        for feat in features:
+            feat_name   = feat.get("feature", "")
+            feat_detail = feat.get("detail", "")
             feat_html += f"""
             <div class="feature-row">
-              <span class="feature-tag">{f.get("feature","")}</span>
-              <span class="role-desc">{f.get("detail","")}</span>
+              <span class="feature-tag">{feat_name}</span>
+              <span class="role-desc">{feat_detail}</span>
             </div>"""
         st.markdown(f"""
         <div class="deep-card">
