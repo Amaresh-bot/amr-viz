@@ -1,4 +1,5 @@
 import streamlit as st
+import streamlit.components.v1 as components
 import json
 import re
 import requests
@@ -39,6 +40,24 @@ html, body, [class*="css"] { font-family: 'DM Mono', monospace; }
     border-radius: 8px; padding: 0.8rem 1rem;
     font-size: 0.8rem; color: #a33; margin-bottom: 1rem;
 }
+.lang-banner {
+    background: #edf7f2; border: 1.5px solid #1a6b4a;
+    border-radius: 8px; padding: 0.9rem 1.1rem;
+    font-size: 0.82rem; color: #1a4a35; margin-bottom: 1rem; line-height: 1.8;
+}
+.word-map-table { width: 100%; border-collapse: collapse; font-size: 0.78rem; margin-top: 4px; }
+.word-map-table th {
+    text-align: left; font-size: 0.65rem; text-transform: uppercase;
+    letter-spacing: 0.08em; color: #7a7a72;
+    padding: 0 10px 8px 0; border-bottom: 1.5px solid #e4e0d8; font-weight: 500;
+}
+.word-map-table td {
+    padding: 7px 10px 7px 0; border-bottom: 1px solid #eeebe4;
+    vertical-align: top; color: #3a3a35; line-height: 1.5;
+}
+.word-map-table tr:last-child td { border-bottom: none; }
+.src-word { font-weight: 500; color: #0f0f0d; font-size: 0.85rem; }
+.translit  { font-size: 0.7rem; color: #7a7a72; font-style: italic; display:block; margin-top:1px; }
 .expl-sentence {
     font-family: 'Fraunces', serif;
     font-size: 1.2rem; font-style: italic; font-weight: 300;
@@ -220,17 +239,17 @@ with st.sidebar:
 
     # ── Static examples (always shown) ─────────────────────────────────────
     st.markdown("**Example sentences**")
-    examples = [
-        "The boy wants to go.",
-        "She did not believe him.",
-        "Obama went to Paris.",
-        "He wants her to stop crying.",
-        "The company fired fifty workers.",
-        "teh cat sat on teh mat",
-        "She rekognized hiz face.",
-        "The girl quickly ran to school.",
-    ]
-    for ex in examples:
+
+    lang_examples = {
+        "English":  ["The boy wants to go.", "She did not believe him.", "Obama went to Paris.", "The company fired fifty workers."],
+        "Hindi":    ["लड़का जाना चाहता है।", "उसने उस पर विश्वास नहीं किया।", "वैज्ञानिक ने एक नई दवा खोजी।"],
+        "Kannada":  ["ಹುಡುಗನು ಹೋಗಲು ಬಯಸುತ್ತಾನೆ.", "ಅವಳು ಅವನನ್ನು ನಂಬಲಿಲ್ಲ.", "ವಿಜ್ಞಾನಿ ಹೊಸ ಔಷಧಿಯನ್ನು ಕಂಡುಹಿಡಿದರು."],
+        "Telugu":   ["అబ్బాయి వెళ్ళాలని అనుకుంటున్నాడు.", "ఆమె అతన్ని నమ్మలేదు.", "శాస్త్రవేత్త కొత్త మందు కనుగొన్నాడు."],
+        "Tamil":    ["சிறுவன் செல்ல விரும்புகிறான்.", "அவள் அவனை நம்பவில்லை.", "விஞ்ஞானி புதிய மருந்தை கண்டுபிடித்தார்."],
+    }
+
+    sel_lang = st.selectbox("Language", list(lang_examples.keys()), key="ex_lang_sel")
+    for ex in lang_examples[sel_lang]:
         if st.button(ex, key=f"ex_{ex}"):
             st.session_state["sentence"] = ex
             st.session_state["sentence_input"] = ex
@@ -251,21 +270,31 @@ with st.sidebar:
 
 # ── Prompt ──────────────────────────────────────────────────────────────────
 def build_prompt(sentence: str) -> str:
-    return f"""You are an AMR (Abstract Meaning Representation) expert and spelling corrector.
+    return f"""You are a multilingual AMR (Abstract Meaning Representation) expert.
+You can handle input in any language: English, Hindi, Kannada, Telugu, Tamil, or others.
 
 INPUT SENTENCE: "{sentence}"
 
-STEP 1 — Check for spelling mistakes. Correct any typos silently.
-STEP 2 — Produce a complete AMR for the corrected sentence.
-STEP 3 — Write a rich explanation as described below.
+STEP 1 — Detect the language of the input.
+STEP 2 — If not English, translate it to English accurately.
+STEP 3 — Check for spelling mistakes in the (possibly translated) sentence. Correct any typos.
+STEP 4 — Produce a complete AMR for the corrected English sentence.
+STEP 5 — Write a rich explanation as described below.
 
 Return ONLY a raw JSON object. No markdown fences. No text before or after the JSON.
 
 {{
   "original": "exactly as typed by user",
-  "corrected": "spell-corrected version, same as original if no errors",
-  "has_spelling_errors": true or false,
-  "spelling_changes": ["teh -> the"] or [],
+  "detected_language": "English or Hindi or Kannada or Telugu or Tamil or other language name",
+  "is_english": true or false,
+  "translation": "English translation if not English, else same as original",
+  "transliteration": "romanized version of non-English input for pronunciation help, empty string if English",
+  "word_map": [
+    {{"source_word": "ಹುಡುಗನು", "translation": "boy", "amr_role": ":ARG0", "note": "subject/agent"}}
+  ],
+  "corrected": "spell-corrected English version",
+  "has_spelling_errors": false,
+  "spelling_changes": [],
   "is_nonsense": false,
   "amr_notation": "AMR string with actual newlines and spaces for indentation",
   "explanation": "1-2 sentences about root concept and notable features. No internal double quotes.",
@@ -283,14 +312,9 @@ Return ONLY a raw JSON object. No markdown fences. No text before or after the J
         "plain_english": "The boy is the one who WANTS — he is the agent performing the wanting."
       }}
     ],
-    "special_features": [
-      {{
-        "feature": "Coreference",
-        "detail": "Variable b appears twice — AMR reuses it to show the boy is both the wanter and the goer, avoiding repetition."
-      }}
-    ],
-    "what_amr_ignores": "AMR ignores tense, articles (the/a), and word order. It only captures core meaning.",
-    "propbank_note": "want-01 comes from PropBank — a dictionary of verb senses. The -01 means sense 1 of want."
+    "special_features": [],
+    "what_amr_ignores": "AMR ignores tense, articles, and word order. It only captures core meaning.",
+    "propbank_note": "want-01 comes from PropBank. The -01 means sense 1 of want."
   }},
   "nodes": [
     {{"variable":"w","concept":"want-01","role":"root","meaning":"wanting event"}},
@@ -302,15 +326,15 @@ Return ONLY a raw JSON object. No markdown fences. No text before or after the J
 }}
 
 STRICT RULES:
+- AMR is ALWAYS in English regardless of input language — translate first then parse
 - PropBank frames only (want-01, go-02, believe-01, discover-01, etc.)
 - Variables: single lowercase letters only
 - meaning: 5 words max
-- explanation and all deep_explanation strings: no double-quotes inside any string value
-- special_features: list only features that actually appear (negation, coreference, named entities, modifiers, quantifiers). Empty list [] if none.
-- is_reentrant: true only for coreference (same variable referenced twice)
+- All string values: no double-quotes inside
+- special_features: only features that actually appear. Empty list [] if none.
+- is_reentrant: true only for coreference
 - Root node role must be exactly "root"
-- For negation: node with variable "neg", concept "-", role ":polarity"
-- Named entities: person/city/country concept + :name + :op1 "String"
+- word_map: map each content word from original to its English translation and AMR role. Skip articles and particles.
 - Output complete valid JSON — do not truncate
 """
 
@@ -499,14 +523,20 @@ def safe_parse(text: str) -> dict:
             )
 
 
-# ── SVG graph builder ───────────────────────────────────────────────────────
-def build_svg(nodes: list, edges: list) -> str:
+# ── Animated graph builder ──────────────────────────────────────────────────
+def build_animated_graph(nodes: list, edges: list) -> str:
+    """
+    Returns an HTML string containing an SVG graph that builds itself
+    step-by-step with slow animation so learners can follow along.
+    Steps: root node → child nodes level by level → edges one by one with labels.
+    """
     if not nodes:
         return ""
 
-    NW, NH, HGAP, VGAP = 118, 34, 24, 66
+    NW, NH, HGAP, VGAP = 118, 34, 24, 70
     root = next((n for n in nodes if n.get("role") == "root"), nodes[0])
 
+    # Build level map via BFS
     child_map = {n["variable"]: [] for n in nodes}
     for e in edges:
         if not e.get("is_reentrant") and e.get("from") in child_map:
@@ -533,8 +563,8 @@ def build_svg(nodes: list, edges: list) -> str:
     for n in nodes:
         by_lvl.setdefault(levels[n["variable"]], []).append(n["variable"])
 
-    max_lvl    = max(by_lvl.keys())
-    max_row_w  = max(len(vs) * (NW + HGAP) - HGAP for vs in by_lvl.values())
+    max_lvl   = max(by_lvl.keys())
+    max_row_w = max(len(vs) * (NW + HGAP) - HGAP for vs in by_lvl.values())
 
     pos = {}
     for lvl, vs in by_lvl.items():
@@ -545,85 +575,341 @@ def build_svg(nodes: list, edges: list) -> str:
                       "y": lvl * (NH + VGAP) + NH / 2}
 
     W = max(max_row_w + 10, 260)
-    H = (max_lvl + 1) * (NH + VGAP) + 30
+    H = (max_lvl + 1) * (NH + VGAP) + 40
 
-    parts = [
-        f'<svg xmlns="http://www.w3.org/2000/svg" width="{W}" height="{H}" '
-        f'viewBox="0 0 {W} {H}" style="display:block;max-width:100%">',
-        """<defs>
-  <marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-    <path d="M1 1.5L8.5 5L1 8.5" fill="none" stroke="#b4b2a9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  </marker>
-  <marker id="mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
-    <path d="M1 1.5L8.5 5L1 8.5" fill="none" stroke="#c4501a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
-  </marker>
-</defs>"""
-    ]
+    # Build node data for JS
+    import json as _json, html as _html
 
+    def node_color(n):
+        is_root  = n.get("role") == "root"
+        is_frame = bool(re.search(r'-\d+$', n.get("concept", "")))
+        fill  = "#0c447c" if is_root else ("#eaf3de" if is_frame else "#e6f1fb")
+        stk   = "#0c447c" if is_root else ("#3b6d11" if is_frame else "#185fa5")
+        tv    = "#85b7eb" if is_root else "#888780"
+        tc    = "#e6f1fb" if is_root else ("#27500a" if is_frame else "#0c447c")
+        return fill, stk, tv, tc
+
+    nodes_js = []
+    for n in nodes:
+        p = pos.get(n["variable"])
+        if not p:
+            continue
+        fill, stk, tv, tc = node_color(n)
+        is_root = n.get("role") == "root"
+        concept = n.get("concept", "")
+        disp    = concept[:10] + "…" if len(concept) > 11 else concept
+        role    = n.get("role", "")
+        meaning = n.get("meaning", "")
+        nodes_js.append({
+            "var": n["variable"], "concept": disp, "fullConcept": concept,
+            "role": role, "meaning": meaning,
+            "x": p["x"], "y": p["y"],
+            "fill": fill, "stk": stk, "tv": tv, "tc": tc,
+            "isRoot": is_root
+        })
+
+    edges_js = []
     for e in edges:
         fp = pos.get(e.get("from"))
         tp = pos.get(e.get("to"))
         if not fp or not tp:
             continue
-        is_re  = e.get("is_reentrant", False)
-        x1, y1 = fp["x"], fp["y"] + NH / 2
-        x2, y2 = tp["x"], tp["y"] - NH / 2
-        stroke  = "#c4501a" if is_re else "#c8c6be"
-        dash    = 'stroke-dasharray="5 3"' if is_re else ""
-        marker  = "url(#mr)" if is_re else "url(#ma)"
-        if is_re:
-            cx = (x1 + x2) / 2 + 50
-            parts.append(
-                f'<path d="M{x1:.1f} {y1:.1f} Q{cx:.1f} {(y1+y2)/2:.1f} {x2:.1f} {y2:.1f}" '
-                f'fill="none" stroke="{stroke}" stroke-width="0.9" {dash} marker-end="{marker}"/>'
-            )
-        else:
-            parts.append(
-                f'<line x1="{x1:.1f}" y1="{y1:.1f}" x2="{x2:.1f}" y2="{y2:.1f}" '
-                f'stroke="{stroke}" stroke-width="0.9" marker-end="{marker}"/>'
-            )
-        mx = (x1 + x2) / 2 + (26 if is_re else 4)
-        my = (y1 + y2) / 2 - 3
-        lc  = "#c4501a" if is_re else "#888780"
-        parts.append(
-            f'<text x="{mx:.1f}" y="{my:.1f}" font-size="9" font-family="DM Mono,monospace" '
-            f'fill="{lc}" text-anchor="middle">{e.get("label","")}</text>'
-        )
+        is_re = e.get("is_reentrant", False)
+        edges_js.append({
+            "from": e.get("from"), "to": e.get("to"),
+            "label": e.get("label", ""),
+            "x1": fp["x"], "y1": fp["y"] + NH / 2,
+            "x2": tp["x"], "y2": tp["y"] - NH / 2,
+            "isRe": is_re
+        })
 
-    for n in nodes:
-        p = pos.get(n["variable"])
-        if not p:
-            continue
-        is_root  = n.get("role") == "root"
-        rx, ry   = p["x"] - NW / 2, p["y"] - NH / 2
-        is_frame = bool(re.search(r'-\d+$', n.get("concept", "")))
-        fill     = "#0c447c" if is_root else ("#eaf3de" if is_frame else "#e6f1fb")
-        stk      = "#0c447c" if is_root else ("#3b6d11" if is_frame else "#185fa5")
-        tv       = "#85b7eb" if is_root else "#888780"
-        tc       = "#e6f1fb" if is_root else ("#27500a" if is_frame else "#0c447c")
-        concept  = n.get("concept", "")
-        disp     = concept[:10] + "…" if len(concept) > 11 else concept
+    nodes_json = _json.dumps(nodes_js)
+    edges_json = _json.dumps(edges_js)
 
-        if is_root:
-            parts.append(
-                f'<rect x="{p["x"]-22:.1f}" y="{ry-5:.1f}" width="44" height="6" rx="2" fill="#f55036"/>'
-            )
-        parts.append(
-            f'<rect x="{rx:.1f}" y="{ry:.1f}" width="{NW}" height="{NH}" rx="5" '
-            f'fill="{fill}" stroke="{stk}" stroke-width="0.8"/>'
-        )
-        parts.append(
-            f'<text x="{rx+6:.1f}" y="{p["y"]:.1f}" font-size="9" font-family="DM Mono,monospace" '
-            f'fill="{tv}" dominant-baseline="central">{n["variable"]}/</text>'
-        )
-        parts.append(
-            f'<text x="{p["x"]+6:.1f}" y="{p["y"]:.1f}" font-size="11" font-weight="500" '
-            f'font-family="DM Mono,monospace" fill="{tc}" text-anchor="middle" '
-            f'dominant-baseline="central">{disp}</text>'
-        )
+    return f"""
+<div style="font-family:'DM Mono',monospace">
+<div style="display:flex;align-items:center;gap:10px;margin-bottom:10px;flex-wrap:wrap">
+  <button onclick="startAnimation()" id="btn-play"
+    style="font-size:12px;padding:6px 16px;border:0.5px solid #c8c6be;border-radius:6px;
+    background:#0f0f0d;color:#f7f5f0;cursor:pointer;font-family:'DM Mono',monospace">
+    Play step-by-step
+  </button>
+  <button onclick="resetGraph()"
+    style="font-size:12px;padding:6px 14px;border:0.5px solid #c8c6be;border-radius:6px;
+    background:transparent;color:#3a3a35;cursor:pointer;font-family:'DM Mono',monospace">
+    Reset
+  </button>
+  <input type="range" id="speed-slider" min="300" max="2000" value="900" step="100"
+    style="width:100px" oninput="updateSpeed(this.value)">
+  <span style="font-size:11px;color:#888780" id="speed-label">Speed: medium</span>
+</div>
 
-    parts.append("</svg>")
-    return "\n".join(parts)
+<div id="step-info"
+  style="font-size:12px;color:#3a3a35;background:#f7f5f0;border:0.5px solid #e4e0d8;
+  border-radius:6px;padding:8px 12px;margin-bottom:10px;min-height:36px;line-height:1.6">
+  Press <strong>Play step-by-step</strong> to watch the AMR graph build itself.
+</div>
+
+<div style="overflow:auto;background:#fafaf8;border:1px solid #e4e0d8;border-radius:8px;padding:12px">
+  <svg id="amr-graph" width="{W}" height="{H}" viewBox="0 0 {W} {H}" style="display:block;max-width:100%">
+    <defs>
+      <marker id="ma" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+        <path d="M1 1.5L8.5 5L1 8.5" fill="none" stroke="#b4b2a9" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+      <marker id="mr" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="5" markerHeight="5" orient="auto-start-reverse">
+        <path d="M1 1.5L8.5 5L1 8.5" fill="none" stroke="#c4501a" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"/>
+      </marker>
+    </defs>
+    <g id="edges-layer"></g>
+    <g id="nodes-layer"></g>
+  </svg>
+</div>
+
+<div style="display:flex;gap:12px;margin-top:10px;flex-wrap:wrap">
+  <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#7a7a72">
+    <rect width="12" height="12" rx="2" style="fill:#0c447c;display:inline-block"></rect>
+    <span>Root event</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#7a7a72">
+    <div style="width:12px;height:12px;border-radius:2px;background:#eaf3de;border:1px solid #3b6d11;display:inline-block"></div>
+    <span>PropBank frame</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#7a7a72">
+    <div style="width:12px;height:12px;border-radius:2px;background:#e6f1fb;border:1px solid #185fa5;display:inline-block"></div>
+    <span>Concept</span>
+  </div>
+  <div style="display:flex;align-items:center;gap:5px;font-size:11px;color:#7a7a72">
+    <div style="width:20px;height:2px;background:#c4501a;display:inline-block"></div>
+    <span>Coreference</span>
+  </div>
+</div>
+</div>
+
+<script>
+(function() {{
+  const NW={NW}, NH={NH};
+  const nodes = {nodes_json};
+  const edges = {edges_json};
+  let stepDelay = 900;
+  let animTimer = null;
+  let running = false;
+
+  function updateSpeed(v) {{
+    stepDelay = parseInt(v);
+    const labels = {{300:'fast',500:'fast',700:'medium',900:'medium',1200:'slow',1500:'slow',2000:'very slow'}};
+    const closest = Object.keys(labels).reduce((a,b) => Math.abs(b-v)<Math.abs(a-v)?b:a);
+    document.getElementById('speed-label').textContent = 'Speed: ' + (labels[closest]||'medium');
+  }}
+
+  function setInfo(html) {{
+    document.getElementById('step-info').innerHTML = html;
+  }}
+
+  function resetGraph() {{
+    if (animTimer) {{ clearTimeout(animTimer); animTimer=null; running=false; }}
+    document.getElementById('edges-layer').innerHTML = '';
+    document.getElementById('nodes-layer').innerHTML = '';
+    document.getElementById('btn-play').textContent = 'Play step-by-step';
+    document.getElementById('btn-play').disabled = false;
+    setInfo('Press <strong>Play step-by-step</strong> to watch the AMR graph build itself.');
+  }}
+
+  function drawNode(n, highlight) {{
+    const g = document.createElementNS('http://www.w3.org/2000/svg','g');
+    g.style.opacity = '0';
+    g.style.transition = 'opacity 0.5s ease';
+
+    if (n.isRoot) {{
+      const crown = document.createElementNS('http://www.w3.org/2000/svg','rect');
+      crown.setAttribute('x', n.x-22); crown.setAttribute('y', n.y-NH/2-5);
+      crown.setAttribute('width',44); crown.setAttribute('height',6);
+      crown.setAttribute('rx',2); crown.setAttribute('fill','#f55036');
+      g.appendChild(crown);
+    }}
+
+    const rect = document.createElementNS('http://www.w3.org/2000/svg','rect');
+    rect.setAttribute('x', n.x-NW/2); rect.setAttribute('y', n.y-NH/2);
+    rect.setAttribute('width',NW); rect.setAttribute('height',NH);
+    rect.setAttribute('rx',5);
+    rect.setAttribute('fill', highlight ? '#fff3b0' : n.fill);
+    rect.setAttribute('stroke', highlight ? '#f0b800' : n.stk);
+    rect.setAttribute('stroke-width', highlight ? '2' : '0.8');
+    rect.style.transition = 'fill 0.6s ease, stroke 0.6s ease';
+
+    const vt = document.createElementNS('http://www.w3.org/2000/svg','text');
+    vt.setAttribute('x', n.x-NW/2+6); vt.setAttribute('y', n.y);
+    vt.setAttribute('font-size','9'); vt.setAttribute('font-family','DM Mono,monospace');
+    vt.setAttribute('fill', n.tv); vt.setAttribute('dominant-baseline','central');
+    vt.textContent = n.var + '/';
+
+    const ct = document.createElementNS('http://www.w3.org/2000/svg','text');
+    ct.setAttribute('x', n.x+6); ct.setAttribute('y', n.y);
+    ct.setAttribute('font-size','11'); ct.setAttribute('font-weight','500');
+    ct.setAttribute('font-family','DM Mono,monospace');
+    ct.setAttribute('fill', highlight ? '#7a5000' : n.tc);
+    ct.setAttribute('text-anchor','middle'); ct.setAttribute('dominant-baseline','central');
+    ct.textContent = n.concept;
+
+    g.appendChild(rect); g.appendChild(vt); g.appendChild(ct);
+    document.getElementById('nodes-layer').appendChild(g);
+
+    requestAnimationFrame(() => {{ g.style.opacity = '1'; }});
+
+    if (highlight) {{
+      setTimeout(() => {{
+        rect.setAttribute('fill', n.fill);
+        rect.setAttribute('stroke', n.stk);
+        ct.setAttribute('fill', n.tc);
+      }}, 700);
+    }}
+    return g;
+  }}
+
+  function drawEdgeAnimated(e, cb) {{
+    const layer = document.getElementById('edges-layer');
+    const is_re = e.isRe;
+    const stroke = is_re ? '#c4501a' : '#c8c6be';
+    const marker = is_re ? 'url(#mr)' : 'url(#ma)';
+
+    let path;
+    let totalLen;
+
+    if (is_re) {{
+      const cx = (e.x1+e.x2)/2 + 50;
+      const cy = (e.y1+e.y2)/2;
+      path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d', `M${{e.x1.toFixed(1)}} ${{e.y1.toFixed(1)}} Q${{cx.toFixed(1)}} ${{cy.toFixed(1)}} ${{e.x2.toFixed(1)}} ${{e.y2.toFixed(1)}}`);
+      path.setAttribute('fill','none');
+      if (is_re) path.setAttribute('stroke-dasharray','5 3');
+    }} else {{
+      path = document.createElementNS('http://www.w3.org/2000/svg','path');
+      path.setAttribute('d', `M${{e.x1.toFixed(1)}} ${{e.y1.toFixed(1)}} L${{e.x2.toFixed(1)}} ${{e.y2.toFixed(1)}}`);
+      path.setAttribute('fill','none');
+    }}
+
+    path.setAttribute('stroke', stroke);
+    path.setAttribute('stroke-width','0.9');
+    path.setAttribute('marker-end', marker);
+    layer.appendChild(path);
+
+    totalLen = path.getTotalLength ? path.getTotalLength() : 80;
+    path.style.strokeDasharray = totalLen;
+    path.style.strokeDashoffset = totalLen;
+    path.style.transition = `stroke-dashoffset ${{stepDelay*0.7}}ms ease`;
+
+    requestAnimationFrame(() => {{
+      path.style.strokeDashoffset = '0';
+    }});
+
+    // Label appears after line finishes
+    setTimeout(() => {{
+      const mx = (e.x1+e.x2)/2 + (is_re ? 26 : 4);
+      const my = (e.y1+e.y2)/2 - 3;
+      const t = document.createElementNS('http://www.w3.org/2000/svg','text');
+      t.setAttribute('x', mx); t.setAttribute('y', my);
+      t.setAttribute('font-size','9'); t.setAttribute('font-family','DM Mono,monospace');
+      t.setAttribute('fill', is_re ? '#c4501a' : '#888780');
+      t.setAttribute('text-anchor','middle');
+      t.style.opacity = '0';
+      t.style.transition = 'opacity 0.4s ease';
+      t.textContent = e.label;
+      layer.appendChild(t);
+      requestAnimationFrame(() => {{ t.style.opacity = '1'; }});
+      if (cb) cb();
+    }}, stepDelay * 0.75);
+  }}
+
+  window.startAnimation = function() {{
+    if (running) return;
+    resetGraph();
+    running = true;
+    document.getElementById('btn-play').textContent = 'Building…';
+    document.getElementById('btn-play').disabled = true;
+
+    // Build step list: root first, then nodes by level, then edges
+    const rootNode = nodes.find(n => n.isRoot) || nodes[0];
+    const otherNodes = nodes.filter(n => !n.isRoot);
+    const steps = [];
+
+    // Step 0: root
+    steps.push({{
+      type:'node', data: rootNode,
+      info: `<strong>Step 1 — Root node</strong><br>
+             <span style="font-family:monospace;color:#0c447c">${{rootNode.var}} / ${{rootNode.fullConcept}}</span><br>
+             The main event of the sentence. Everything else attaches to this.`
+    }});
+
+    // Subsequent nodes
+    otherNodes.forEach((n, i) => {{
+      const roleText = n.role === 'root' ? '' : ` via <span style="font-family:monospace;color:#854F0B">${{n.role}}</span>`;
+      steps.push({{
+        type:'node', data: n,
+        info: `<strong>Node ${{i+2}}</strong>${{roleText}}<br>
+               <span style="font-family:monospace;color:#0c447c">${{n.var}} / ${{n.fullConcept}}</span><br>
+               ${{n.meaning}}`
+      }});
+    }});
+
+    // Edges
+    edges.forEach((e, i) => {{
+      const fromNode = nodes.find(n => n.var === e.from);
+      const toNode   = nodes.find(n => n.var === e.to);
+      const fn = fromNode ? fromNode.fullConcept : e.from;
+      const tn = toNode   ? toNode.fullConcept   : e.to;
+      const reText = e.isRe ? ' <em>(coreference — same node referenced again)</em>' : '';
+      steps.push({{
+        type:'edge', data: e,
+        info: `<strong>Edge — <span style="font-family:monospace;color:#854F0B">${{e.label}}</span></strong>${{reText}}<br>
+               <span style="font-family:monospace">${{fn}}</span> →
+               <span style="font-family:monospace">${{tn}}</span><br>
+               ${{e.label === ':ARG0' ? 'Agent: who performs the action' :
+                  e.label === ':ARG1' ? 'Patient: what the action is done to' :
+                  e.label === ':ARG2' ? 'Destination or beneficiary' :
+                  e.label === ':mod'  ? 'Modifier: describes a property' :
+                  e.label === ':polarity' ? 'Negation: this event did NOT happen' :
+                  e.label === ':name' ? 'Name: labels a named entity' :
+                  e.label === ':quant'? 'Quantity: how many' :
+                  'Semantic relation between concepts'}}`
+      }});
+    }});
+
+    // Final step
+    steps.push({{
+      type:'done',
+      info: `<strong>Graph complete!</strong><br>
+             ${{nodes.length}} nodes · ${{edges.length}} edges · This is the full AMR.`
+    }});
+
+    let si = 0;
+    function runStep() {{
+      if (si >= steps.length) {{
+        running = false;
+        document.getElementById('btn-play').textContent = 'Play again';
+        document.getElementById('btn-play').disabled = false;
+        return;
+      }}
+      const step = steps[si++];
+      setInfo(step.info);
+
+      if (step.type === 'node') {{
+        drawNode(step.data, true);
+        animTimer = setTimeout(runStep, stepDelay);
+      }} else if (step.type === 'edge') {{
+        drawEdgeAnimated(step.data, () => {{
+          animTimer = setTimeout(runStep, stepDelay * 0.3);
+        }});
+      }} else {{
+        animTimer = setTimeout(runStep, stepDelay);
+      }}
+    }}
+    runStep();
+  }};
+
+  window.resetGraph = resetGraph;
+  window.updateSpeed = updateSpeed;
+}})();
+</script>
+"""
 
 
 # ── AMR syntax highlighter ──────────────────────────────────────────────────
@@ -738,7 +1024,7 @@ col_inp, col_btn = st.columns([5, 1])
 with col_inp:
     sentence = st.text_input(
         "sentence",
-        placeholder="e.g. The scientist quickly discovered a cure.",
+        placeholder="Type in English, Hindi (हिंदी), Kannada (ಕನ್ನಡ), Telugu (తెలుగు), Tamil (தமிழ்)...",
         label_visibility="collapsed",
         key="sentence_input",
     )
@@ -781,6 +1067,23 @@ if "amr_result" in st.session_state:
             'does not appear to be a valid sentence. Showing best-effort AMR.</div>',
             unsafe_allow_html=True,
         )
+
+    # Language detection banner
+    lang = data.get("detected_language", "English")
+    is_english = data.get("is_english", True)
+    if not is_english:
+        translation   = data.get("translation", "")
+        translit      = data.get("transliteration", "")
+        translit_html = f'<br><span style="opacity:.7">Pronunciation: <em>{translit}</em></span>' if translit else ""
+        st.markdown(
+            f'<div class="lang-banner">'
+            f'<strong>Language detected: {lang}</strong><br>'
+            f'Translation: <em>{translation}</em>'
+            f'{translit_html}<br>'
+            f'<span style="opacity:.7;font-size:0.75rem">AMR is built from the English translation</span>'
+            f'</div>',
+            unsafe_allow_html=True,
+        )
     elif data.get("has_spelling_errors") and data.get("spelling_changes"):
         changes = " &nbsp;·&nbsp; ".join(data["spelling_changes"])
         st.markdown(
@@ -791,8 +1094,15 @@ if "amr_result" in st.session_state:
             unsafe_allow_html=True,
         )
 
-    display_sent = data.get("corrected") or data.get("original", sentence)
-    st.markdown(f'<div class="expl-sentence">"{display_sent}"</div>', unsafe_allow_html=True)
+    # Show original (and translation if non-English)
+    display_sent = data.get("corrected") or data.get("translation") or data.get("original", sentence)
+    original_raw = data.get("original", "")
+    if not is_english and original_raw:
+        st.markdown(f'<div class="expl-sentence">{original_raw}</div>', unsafe_allow_html=True)
+        st.markdown(f'<div style="font-size:0.82rem;color:#7a7a72;margin-bottom:0.4rem;font-style:italic">English: "{display_sent}"</div>', unsafe_allow_html=True)
+    else:
+        st.markdown(f'<div class="expl-sentence">"{display_sent}"</div>', unsafe_allow_html=True)
+
     st.markdown(f'<div class="expl-text">{data.get("explanation","")}</div>', unsafe_allow_html=True)
     st.markdown("<br>", unsafe_allow_html=True)
 
@@ -804,14 +1114,37 @@ if "amr_result" in st.session_state:
             unsafe_allow_html=True,
         )
     with col_graph:
-        st.markdown('<div class="section-label">Graph</div>', unsafe_allow_html=True)
-        svg = build_svg(data.get("nodes", []), data.get("edges", []))
-        if svg:
-            st.markdown(
-                f'<div style="border:1px solid #e4e0d8;border-radius:8px;padding:14px;'
-                f'background:#fafaf8;overflow:auto">{svg}</div>',
-                unsafe_allow_html=True,
+        st.markdown('<div class="section-label">Graph — animated</div>', unsafe_allow_html=True)
+        animated_html = build_animated_graph(data.get("nodes", []), data.get("edges", []))
+        if animated_html:
+            graph_h = max(340, len(data.get("nodes",[])) * 90 + 200)
+            components.html(animated_html, height=graph_h, scrolling=False)
+
+    # Word map (for non-English input)
+    word_map = data.get("word_map", [])
+    if word_map and not is_english:
+        st.markdown("<br>", unsafe_allow_html=True)
+        st.markdown('<div class="section-label">Word-by-word mapping</div>', unsafe_allow_html=True)
+        wm_rows = ""
+        for w in word_map:
+            src  = w.get("source_word", "")
+            trl  = w.get("translation", "")
+            role = w.get("amr_role", "")
+            note = w.get("note", "")
+            wm_rows += (
+                f'<tr>'
+                f'<td><span class="src-word">{src}</span></td>'
+                f'<td>{trl}</td>'
+                f'<td><span class="role-badge">{role}</span></td>'
+                f'<td style="color:#7a7a72">{note}</td>'
+                f'</tr>'
             )
+        st.markdown(
+            f'<table class="word-map-table"><thead><tr>'
+            f'<th>{lang} word</th><th>English</th><th>AMR role</th><th>Note</th>'
+            f'</tr></thead><tbody>{wm_rows}</tbody></table>',
+            unsafe_allow_html=True,
+        )
 
     st.markdown("<br>", unsafe_allow_html=True)
     st.markdown('<div class="section-label">Node &amp; edge breakdown</div>', unsafe_allow_html=True)
@@ -846,8 +1179,8 @@ elif not parse_clicked:
     st.markdown("""
     <div style="text-align:center;padding:3rem 1rem;color:#7a7a72;font-size:0.82rem;line-height:2.2">
         Enter a sentence above and click <strong>Parse →</strong><br>
+        Supports <strong>English · Hindi · Kannada · Telugu · Tamil</strong> and more.<br>
         AMR captures <em>who did what to whom</em>, ignoring word order and tense.<br>
-        Spelling mistakes are detected and corrected automatically.<br>
         <span style="font-size:0.72rem;color:#aaa">Powered by Groq · Llama 3.3 70B · Free forever</span>
     </div>
     """, unsafe_allow_html=True)
